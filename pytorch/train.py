@@ -11,7 +11,7 @@ import torch.optim as optim
 
 
 
-sys.path.append('/home/wanggang/projects/GeneInference/dense/')
+sys.path.append('/home/wanggang/GeneInference/')
 from model.x1_x2_2 import x1_x2_2
 from model.x1_x2_3 import x1_x2_3
 from utils.load_data import MyDataSet
@@ -31,7 +31,7 @@ from model.x1_x2_3_e import x1_x2_3_e
 1、定义超参数
 '''
 # 采用的网络模型
-MODEL = 'relu_3'
+MODEL = 'x1_x2_2'
 # 训练批次数
 NUM_EPOCH = 200
 # batch的大小
@@ -39,17 +39,19 @@ BATCH_SIZE = 5000
 # 输入维度大小
 IN_SIZE = 943
 # 输出维度大小
-OUT_SIZE = 4760
+OUT_SIZE = 3173
 # 隐藏层单元数
-HIDDEN_SIZE = 3000
+HIDDEN_SIZE = 1000
 # dropout
 DROPOUT_RATE = 0.1
 # 学习率
 LEARNING_RATE = 5e-4
 # 训练使用的数据集
-DATASET = '0-4760'
+DATASET = '3173'
 # 试验次数的序号
 FILENUM = 0
+# 训练使用的数据集的划分方式
+DATASET_DIVIDE = ''
 def get_arguments():
     """
     Parse all the arguments provided from the CLI.
@@ -75,9 +77,11 @@ def get_arguments():
     parser.add_argument("--learning-rate", type=float, default=LEARNING_RATE,
                         help="learning rate, 5e-4?")
     parser.add_argument("--dataset", type=str, default=DATASET,
-                        help="the part of dataset you want use,0-4760 or 4760-9520")
+                        help="the part of dataset you want use,3173 6146 9520-3 4760 9520-2")
     parser.add_argument("--file-num", type=int, default=FILENUM,
                         help="the number of test times")
+    parser.add_argument("--dataset-divide", type=str, default=DATASET_DIVIDE,
+                        help="tr va te:8 1 1 or 7 1 2,7 1 2 should be _new")
     return parser.parse_args()
 
 args = get_arguments()
@@ -89,14 +93,17 @@ def main():
     '''
     print('loading data...:'+args.dataset)
 
-    tr_set = MyDataSet(x_path='../../original_dataset/bgedv2_X_tr_float64.npy', y_path='../../original_dataset/bgedv2_Y_tr_'+args.dataset+'_float64.npy')
+    tr_set = MyDataSet(x_path='../../dataset/bgedv2_X_tr'+args.dataset_divide+'_float64.npy', y_path='../../dataset/bgedv2_Y_tr_'+args.dataset+'_float64.npy')
     tr_loader = torch.utils.data.DataLoader(tr_set, batch_size=args.batch_size, shuffle=True)
 
-    # X_va = torch.from_numpy(np.array(np.load('../../original_dataset/bgedv2_X_va_float64.npy'))).type(torch.FloatTensor).cuda()
-    # Y_va = torch.from_numpy(np.array(np.load('../../original_dataset/bgedv2_Y_va_'+args.dataset+'_float64.npy'))).type(torch.FloatTensor).cuda()
+    X_va = torch.from_numpy(np.array(np.load('../../dataset/bgedv2_X_va'+args.dataset_divide+'_float64.npy'))).type(torch.FloatTensor).cuda()
+    Y_va = torch.from_numpy(np.array(np.load('../../dataset/bgedv2_Y_va'+args.dataset_divide+'_'+args.dataset+'_float64.npy'))).type(torch.FloatTensor).cuda()
 
-    X_te = torch.from_numpy(np.array(np.load('../../original_dataset/bgedv2_X_te_float64.npy'))).type(torch.FloatTensor).cuda()
-    Y_te = torch.from_numpy(np.array(np.load('../../original_dataset/bgedv2_Y_te_'+args.dataset+'_float64.npy'))).type(torch.FloatTensor).cuda()
+    X_te = torch.from_numpy(np.array(np.load('../../dataset/bgedv2_X_te'+args.dataset_divide+'_float64.npy'))).type(torch.FloatTensor).cuda()
+    Y_te = torch.from_numpy(np.array(np.load('../../dataset/bgedv2_Y_te'+args.dataset_divide+'_'+args.dataset+'_float64.npy'))).type(torch.FloatTensor).cuda()
+
+    X_GTEx = torch.from_numpy(np.array(np.load('../../dataset/GTEx_X_float64.npy'))).type(torch.FloatTensor).cuda()
+    Y_GTEx = torch.from_numpy(np.array(np.load('../../dataset/GTEx_Y_'+args.dataset+'_float64.npy'))).type(torch.FloatTensor).cuda()
 
     '''
     2、定义网络
@@ -113,10 +120,11 @@ def main():
     4、开始训练网络
     '''
     MAE_te_best = 10.0
+    MAE_GTEx_best = 10.0
     net_parameters_GEO = {}
-    best_te_res = torch.zeros(11101, 4760)
-    outlog = open('../../res/dense/'+args.model+'-'+str(args.hidden_size)+'-'+args.dataset +'-'+ str(args.dropout_rate) +'-'+str(args.file_num)+'_GEO_3000*3.log', 'w')
-    log_str = '\t'.join(map(str, ['epoch', 'MAE_te',  'MAE_tr', 'time(sec)']))
+    net_parameters_GTEx = {}
+    outlog = open('../../res/dense/'+args.model+'-'+str(args.hidden_size)+'-'+args.dataset + args.dataset_divide+'-'+ str(args.dropout_rate) +'-'+str(args.file_num)+'.log', 'w')
+    log_str = '\t'.join(map(str, ['epoch', 'MAE_va', 'MAE_te',  'MAE_tr', 'MAE_GTEx',  'time(sec)']))
     print(log_str)
     outlog.write(log_str + '\n')
     sys.stdout.flush()
@@ -135,12 +143,6 @@ def main():
 
             tr_outputs = net.module(x_batch)
 
-            # l1_loss = 0
-            # for param in net.parameters():
-            #     if len(param.shape) == 2:
-            #         l1_loss += torch.sum(abs(param))
-
-            # loss = criterion(tr_outputs, y_batch) + l1_loss
             loss = criterion(tr_outputs, y_batch)
             # backward
             optimizer.zero_grad()
@@ -155,16 +157,21 @@ def main():
             with torch.no_grad():
                 net.eval()
                 #计算output
+                va_outputs = net(X_va)
                 te_outputs = net(X_te)
+                GTEx_outputs = net(X_GTEx)
 
                 #计算MAE
                 MAE_tr = np.abs(y_batch.detach().cpu().numpy()  - tr_outputs.detach().cpu().numpy() ).mean()
+                MAE_va = np.abs(Y_va.detach().cpu().numpy()  - va_outputs.detach().cpu().numpy() ).mean()
                 MAE_te = np.abs(Y_te.detach().cpu().numpy()  - te_outputs.detach().cpu().numpy() ).mean()
+                MAE_GTEx = np.abs(Y_GTEx.detach().cpu().numpy() - GTEx_outputs.detach().cpu().numpy()).mean()
 
                 t_new = time.time()
                 log_str = '\t'.join(
                     # 这里18的前提是：88807/5000！！！，但只是序号而已，不重要
-                    map(str, [(epoch * 18) + i + 1, '%.6f' % MAE_te, '%.6f' % MAE_tr, int(t_new - t_old)]))
+                    map(str, [(epoch * 18) + i + 1, '%.6f' % MAE_va, '%.6f' % MAE_te,
+                              '%.6f' % MAE_tr, '%.6f' % MAE_GTEx,int(t_new - t_old)]))
                 print(log_str)
                 outlog.write(log_str + '\n')
                 sys.stdout.flush()
@@ -172,18 +179,22 @@ def main():
                 if MAE_te < MAE_te_best:
                     MAE_te_best = MAE_te
                     net_parameters_GEO = net.state_dict()
-                    best_te_res = te_outputs
+                if MAE_GTEx < MAE_GTEx_best:
+                    MAE_GTEx_best = MAE_GTEx
+                    net_parameters_GTEx = net.state_dict()
         print("epoch %d training over" % epoch)
     # 保存训练出来的模型
     torch.save(net_parameters_GEO, '../../res/dense/' + args.model + '-' + str(
-        args.hidden_size) + '-' + args.dataset +'-' + str(args.dropout_rate) + '-' + str(
-        args.file_num) + '_GEO_3000*3.pt')
-    # 保存最佳预测结果
-    np_best_te_res = best_te_res.detach().cpu().numpy()
-    np.save('../../res/dense/' + args.model + '-' + str(args.hidden_size) + '-' + str(args.dropout_rate) + '-'
-            + str(args.dataset) + '-' + str(args.file_num) + '_GEO_3000*3.npy', np_best_te_res)
-    print("MAE_te_best:", MAE_te_best)
+        args.hidden_size) + '-' + args.dataset + args.dataset_divide + '-' + str(args.dropout_rate) + '-' + str(
+        args.file_num) + '_GEO.pt')
+    torch.save(net_parameters_GTEx, '../../res/dense/' + args.model + '-' + str(
+        args.hidden_size) + '-' + args.dataset + args.dataset_divide + '-' + str(args.dropout_rate) + '-' + str(
+        args.file_num) + '_GTEx.pt')
+
+    print('MAE_te_best : %.6f' % (MAE_te_best))
+    print('MAE_GTEx_best : %.6f' % (MAE_GTEx_best))
     outlog.write('MAE_te_best : %.6f' % (MAE_te_best) + '\n')
+    outlog.write('MAE_GTEx_best : %.6f' % (MAE_GTEx_best) + '\n')
     outlog.close()
     print('Finish Training')
 main()
